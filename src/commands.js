@@ -26,6 +26,11 @@ const commands = [
       "Move everyone out of the war game channels into a main war games vc",
     defaultMemberPermissions: "0",
   },
+  {
+    name: "movetowarroom",
+    description: "Move everyone from main VC to the war room stage channel",
+    defaultMemberPermissions: "0",
+  },
 ];
 
 const rest = new REST({ version: "10" }).setToken(TOKEN);

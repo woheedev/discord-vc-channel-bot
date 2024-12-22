@@ -128,6 +128,42 @@ client.on("interactionCreate", async (interaction) => {
         }\n- Stage channel ${stageInstance ? "closed" : "unchanged"}`,
       });
     }
+
+    if (interaction.commandName === "movetowarroom") {
+      const sourceChannel =
+        interaction.guild.channels.cache.get(MAINVC_CHANNEL_ID);
+      const targetChannel =
+        interaction.guild.channels.cache.get(STAGE_CHANNEL_ID);
+
+      if (!sourceChannel || !targetChannel)
+        throw new Error("Source channel or target channel not found");
+
+      const voiceMembers = sourceChannel.members.filter(
+        (member) => member.voice.channelId === MAINVC_CHANNEL_ID
+      );
+
+      if (!voiceMembers.size)
+        throw new Error("No members in main voice channel");
+
+      let moved = 0,
+        failed = 0;
+
+      for (const [, member] of voiceMembers) {
+        try {
+          await member.voice.setChannel(targetChannel);
+          moved++;
+        } catch {
+          failed++;
+        }
+      }
+
+      Logger.command(`Moved to war room: ${moved} moved, ${failed} failed`);
+      await interaction.editReply({
+        content: `✅ Moved to war room:\n- ${moved} members moved${
+          failed ? `\n- ${failed} members failed to move` : ""
+        }`,
+      });
+    }
   } catch (error) {
     Logger.error(`Error in ${interaction.commandName} command: ${error}`);
     await interaction.editReply({
