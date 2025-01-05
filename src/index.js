@@ -22,6 +22,8 @@ const WARGAMES_TEAM_VCS = [
   "1315081224527675392",
 ];
 const WARGAMES_LOBBY_VC = "1315080996516921344";
+const COMMAND_COOLDOWN = 5 * 60 * 1000; // 5 minutes in milliseconds
+const commandCooldowns = new Map();
 
 const client = new Client({
   intents: [
@@ -38,137 +40,175 @@ client.on("ready", () => {
   Logger.info(`Bot logged in as ${client.user.tag}`);
 });
 
+const getChannel = (guild, channelId, name = "channel") => {
+  const channel = guild.channels.cache.get(channelId);
+  if (!channel) throw new Error(`${name} not found (ID: ${channelId})`);
+  return channel;
+};
+
+const getMembersInVoice = (channel, requiredChannelId = null) => {
+  const members = Array.from(channel.members.values());
+  return requiredChannelId
+    ? members.filter((m) => m.voice.channelId === requiredChannelId)
+    : members;
+};
+
+const moveMembers = async (members, targetChannel) => {
+  if (!members.length) {
+    throw new Error("No members to move");
+  }
+
+  const moves = members.map((member) => ({
+    member,
+    promise: member.voice
+      .setChannel(targetChannel)
+      .then(() => true)
+      .catch((error) => {
+        Logger.warn(`Failed to move ${member.user.tag}: ${error.message}`);
+        return false;
+      }),
+  }));
+
+  const results = await Promise.all(moves.map((m) => m.promise));
+  return {
+    moved: results.filter(Boolean).length,
+    failed: results.filter((r) => !r).length,
+  };
+};
+
+const checkCooldown = (userId, commandName) => {
+  const key = `${userId}-${commandName}`;
+  const cooldownEnd = commandCooldowns.get(key);
+
+  if (cooldownEnd && Date.now() < cooldownEnd) {
+    const remainingMs = cooldownEnd - Date.now();
+    const minutes = Math.floor(remainingMs / 60000);
+    const seconds = Math.ceil((remainingMs % 60000) / 1000);
+    const timeStr = minutes > 0 ? `${minutes}m ${seconds}s` : `${seconds}s`;
+    throw new Error(
+      `This command was recently used. Please wait ${timeStr} before using it again.`
+    );
+  }
+
+  commandCooldowns.set(key, Date.now() + COMMAND_COOLDOWN);
+};
+
+const commands = {
+  endwargames: async (interaction) => {
+    const targetChannel = getChannel(
+      interaction.guild,
+      WARGAMES_LOBBY_VC,
+      "lobby"
+    );
+
+    const membersToMove = WARGAMES_TEAM_VCS.flatMap((channelId) => {
+      try {
+        const channel = getChannel(
+          interaction.guild,
+          channelId,
+          "team channel"
+        );
+        return getMembersInVoice(channel);
+      } catch (error) {
+        Logger.warn(error.message);
+        return [];
+      }
+    });
+
+    const { moved, failed } = await moveMembers(membersToMove, targetChannel);
+    return `✅ War games ended:\n- ${moved} members moved${
+      failed ? `\n- ⚠️ ${failed} members failed to move` : ""
+    }`;
+  },
+
+  endstage: async (interaction) => {
+    const stageChannel = getChannel(
+      interaction.guild,
+      STAGE_CHANNEL_ID,
+      "stage"
+    );
+    const targetChannel = getChannel(
+      interaction.guild,
+      MAINVC_CHANNEL_ID,
+      "main VC"
+    );
+
+    const membersToMove = getMembersInVoice(stageChannel, STAGE_CHANNEL_ID);
+    const { moved, failed } = await moveMembers(membersToMove, targetChannel);
+
+    let stageStatus = "unchanged";
+    try {
+      const { stageInstance } = stageChannel;
+      if (stageInstance) {
+        await stageInstance.delete();
+        stageStatus = "closed";
+      }
+    } catch (error) {
+      Logger.error(`Failed to delete stage instance: ${error.message}`);
+      stageStatus = "failed to close";
+    }
+
+    return `✅ Stage ended:\n- ${moved} members moved${
+      failed ? `\n- ⚠️ ${failed} members failed to move` : ""
+    }\n- Stage ${stageStatus}`;
+  },
+
+  movetowarroom: async (interaction) => {
+    const sourceChannel = getChannel(
+      interaction.guild,
+      MAINVC_CHANNEL_ID,
+      "main VC"
+    );
+    const targetChannel = getChannel(
+      interaction.guild,
+      STAGE_CHANNEL_ID,
+      "stage"
+    );
+
+    const membersToMove = getMembersInVoice(sourceChannel, MAINVC_CHANNEL_ID);
+    const { moved, failed } = await moveMembers(membersToMove, targetChannel);
+
+    return `✅ Moved to war room:\n- ${moved} members moved${
+      failed ? `\n- ⚠️ ${failed} members failed to move` : ""
+    }`;
+  },
+};
+
 client.on("interactionCreate", async (interaction) => {
   if (!interaction.isChatInputCommand()) return;
 
-  if (!hasStaffRole(interaction.member)) {
-    await interaction.reply({
-      content: "You don't have permission to use this command",
-      ephemeral: true,
-    });
-    return;
-  }
-
-  await interaction.deferReply({ ephemeral: true });
+  const { commandName, user } = interaction;
 
   try {
-    if (interaction.commandName === "endwargames") {
-      const targetChannel =
-        interaction.guild.channels.cache.get(WARGAMES_LOBBY_VC);
-      if (!targetChannel) throw new Error("Target channel not found");
-
-      let moved = 0,
-        failed = 0;
-
-      for (const channelId of WARGAMES_TEAM_VCS) {
-        const sourceChannel = interaction.guild.channels.cache.get(channelId);
-        if (!sourceChannel) continue;
-
-        for (const [, member] of sourceChannel.members) {
-          try {
-            await member.voice.setChannel(targetChannel);
-            moved++;
-          } catch {
-            failed++;
-          }
-        }
-      }
-
-      Logger.command(`War games ended: ${moved} moved, ${failed} failed`);
-      await interaction.editReply({
-        content: `✅ War games ended:\n- ${moved} members moved${
-          failed ? `\n- ${failed} members failed to move` : ""
-        }`,
-      });
+    if (!hasStaffRole(interaction.member)) {
+      throw new Error("You don't have permission to use this command");
     }
 
-    if (interaction.commandName === "endstage") {
-      const stageChannel =
-        interaction.guild.channels.cache.get(STAGE_CHANNEL_ID);
-      const targetChannel =
-        interaction.guild.channels.cache.get(MAINVC_CHANNEL_ID);
+    checkCooldown(user.id, commandName);
 
-      if (!stageChannel || !targetChannel)
-        throw new Error("Stage channel or target channel not found");
+    const command = commands[commandName];
+    if (!command) return;
 
-      const voiceMembers = stageChannel.members.filter(
-        (member) => member.voice.channelId === STAGE_CHANNEL_ID
-      );
+    await interaction.deferReply({ ephemeral: true });
+    const response = await command(interaction);
+    await interaction.editReply({ content: response });
 
-      if (!voiceMembers.size) throw new Error("No members in stage channel");
-
-      let moved = 0,
-        failed = 0;
-      let stageInstance;
-
-      for (const [, member] of voiceMembers) {
-        try {
-          await member.voice.setChannel(targetChannel);
-          moved++;
-        } catch {
-          failed++;
-        }
-      }
-
-      try {
-        stageInstance = stageChannel.stageInstance;
-        if (stageInstance) await stageInstance.delete();
-      } catch (error) {
-        Logger.error(`Failed to delete stage instance: ${error}`);
-      }
-
-      Logger.command(
-        `Stage ended: ${moved} moved, ${failed} failed, stage ${
-          stageInstance ? "closed" : "unchanged"
-        }`
-      );
-      await interaction.editReply({
-        content: `✅ Stage ended:\n- ${moved} members moved${
-          failed ? `\n- ${failed} members failed to move` : ""
-        }\n- Stage channel ${stageInstance ? "closed" : "unchanged"}`,
-      });
-    }
-
-    if (interaction.commandName === "movetowarroom") {
-      const sourceChannel =
-        interaction.guild.channels.cache.get(MAINVC_CHANNEL_ID);
-      const targetChannel =
-        interaction.guild.channels.cache.get(STAGE_CHANNEL_ID);
-
-      if (!sourceChannel || !targetChannel)
-        throw new Error("Source channel or target channel not found");
-
-      const voiceMembers = sourceChannel.members.filter(
-        (member) => member.voice.channelId === MAINVC_CHANNEL_ID
-      );
-
-      if (!voiceMembers.size)
-        throw new Error("No members in main voice channel");
-
-      let moved = 0,
-        failed = 0;
-
-      for (const [, member] of voiceMembers) {
-        try {
-          await member.voice.setChannel(targetChannel);
-          moved++;
-        } catch {
-          failed++;
-        }
-      }
-
-      Logger.command(`Moved to war room: ${moved} moved, ${failed} failed`);
-      await interaction.editReply({
-        content: `✅ Moved to war room:\n- ${moved} members moved${
-          failed ? `\n- ${failed} members failed to move` : ""
-        }`,
-      });
-    }
+    Logger.command(`${user.tag} used /${commandName}`);
   } catch (error) {
-    Logger.error(`Error in ${interaction.commandName} command: ${error}`);
-    await interaction.editReply({
-      content: "An error occurred. Please try again or contact an admin.",
-    });
+    const errorMessage =
+      error.message ||
+      "An error occurred. Please try again or contact an admin.";
+
+    if (interaction.deferred) {
+      await interaction.editReply({ content: `❌ ${errorMessage}` });
+    } else {
+      await interaction.reply({
+        content: `❌ ${errorMessage}`,
+        ephemeral: true,
+      });
+    }
+
+    Logger.error(`Error in ${commandName}: ${error.message}`);
   }
 });
 
