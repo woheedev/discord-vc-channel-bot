@@ -15,23 +15,6 @@ if (!CLIENT_ID) {
 
 const commands = [
   {
-    name: "endstage",
-    description:
-      "Move everyone out of the war room stage channel into a main comms vc and close the stage",
-    defaultMemberPermissions: "0",
-  },
-  {
-    name: "endwargames",
-    description:
-      "Move everyone out of the war game channels into a main war games vc",
-    defaultMemberPermissions: "0",
-  },
-  {
-    name: "movetowarroom",
-    description: "Move everyone from main VC to the war room stage channel",
-    defaultMemberPermissions: "0",
-  },
-  {
     name: "night",
     description: "Check night cycle information",
     options: [
@@ -71,6 +54,32 @@ const commands = [
         type: 7, // CHANNEL type
         required: true,
         channel_types: [2, 13], // Voice Channel (2) and Stage Channel (13)
+      },
+    ],
+    defaultMemberPermissions: "0",
+  },
+  {
+    name: "addrole",
+    description: "Add/remove a role to all members who have a specific role",
+    options: [
+      {
+        name: "filter_role",
+        description: "The role that members must have",
+        type: 8, // ROLE type
+        required: true,
+      },
+      {
+        name: "target_role",
+        description: "The role to add/remove from those members",
+        type: 8, // ROLE type
+        required: true,
+      },
+      {
+        name: "remove",
+        description:
+          "Whether to remove the role instead of adding it (default: false)",
+        type: 5, // BOOLEAN type
+        required: false,
       },
     ],
     defaultMemberPermissions: "0",

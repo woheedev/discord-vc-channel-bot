@@ -24,36 +24,76 @@ const Logger = {
   error: (msg) => console.log(chalk.red(Logger.formatMessage("ERROR", msg))),
 };
 
-const STAGE_CHANNEL_ID = "1315169123147317299";
-const MAINVC_CHANNEL_ID = "1309266911703334956";
 const STAFF_ROLES = ["1309271313398894643", "1309284427553312769"];
-const WARGAMES_TEAM_VCS = [
-  "1315081114540310559",
-  "1315081154453311540",
-  "1315081197285802004",
-  "1315081224527675392",
-];
-const WARGAMES_LOBBY_VC = "1315080996516921344";
 const COMMAND_COOLDOWN = 5 * 60 * 1000; // 5 minutes in milliseconds
 const commandCooldowns = new Map();
-const CREATE_VC_ID = "1328916738133463073";
-const USER_VC_CATEGORY_ID = "1315056498249830470"; // Category where the create-vc channel is
-const PROTECTED_CATEGORY_CHANNELS = [
-  CREATE_VC_ID,
-  "1315169123147317299",
-  "1309266911703334956",
-  "1309270651185401938",
-]; // Add IDs of channels that should never be deleted
-const CONNECT_ROLE_ID = "1309573703474085908";
+
+// War reminder configuration
+const WAR_REMINDERS_ENABLED = false; // Set to false to disable war reminders
+
+// Hailstorm Category (Private)
+const HAILSTORM_CATEGORY_ID = "1315075287754608782";
+const HAILSTORM_CREATE_VC_ID = "1376040302741291089";
+const HAILSTORM_MAIN_VC_ID = "1315076035498479666";
+const HAILSTORM_CONNECT_ROLE = "1315072176839327846";
+
+// Public Category
+const PUBLIC_CATEGORY_ID = "1311765614355943434";
+const PUBLIC_CREATE_VC_ID = "1368646169198202981";
+const PUBLIC_MAIN_VC_ID = "1311755513582583920";
+
+// Hazardous (Member Role Restricted)
+const HAZARDOUS_CREATE_VC_ID = "1376041758038691880";
+const HAZARDOUS_CONNECT_ROLE = "1309573703474085908";
+
+// Warborne
+const WARBORNE_ROLE = "1366208130802782208";
+const WARBORNE_REMINDER_CHANNEL = "1366818093799837806";
+
 const PINGABLE_ROLES = [
-  "1316112180298383371",
-  "1316112144600662176",
-  "1326419727698104320",
-  "1326419959705767976",
+  "1316112180298383371", // War Games
+  "1316112144600662176", // PVP
+  "1326419727698104320", // Runes
+  "1326419959705767976", // Dungeons
+  "1328922478617296976", // Contracts
+  "1331673372127399977", // Island
 ];
 const PING_PERMISSION_HOURS = {
-  start: 17, // 5 PM EST
-  end: 23, // 11 PM EST
+  start: { hour: 16, minute: 30 }, // 4:30 PM EST
+  end: { hour: 1, minute: 0 }, // 1:00 AM EST (midnight)
+};
+
+const WAR_REMINDER_CONFIG = {
+  channelId: WARBORNE_REMINDER_CHANNEL, // Channel to send reminders in
+  roleId: WARBORNE_ROLE,
+  reminders: [
+    { hour: 14, minute: 30 }, // 2:30 PM EST
+    { hour: 19, minute: 30 }, // 7:30 PM EST
+  ],
+  messageTemplate: "War at {time} {relative} -- Start getting on to prep!",
+};
+
+const VC_SYSTEMS = {
+  public: {
+    createChannelId: PUBLIC_CREATE_VC_ID,
+    categoryId: PUBLIC_CATEGORY_ID,
+    protectedChannels: [PUBLIC_CREATE_VC_ID, PUBLIC_MAIN_VC_ID],
+    isRestricted: false,
+  },
+  hailstorm: {
+    createChannelId: HAILSTORM_CREATE_VC_ID,
+    categoryId: HAILSTORM_CATEGORY_ID,
+    protectedChannels: [HAILSTORM_CREATE_VC_ID, HAILSTORM_MAIN_VC_ID],
+    isRestricted: true,
+    connectRoleId: HAILSTORM_CONNECT_ROLE,
+  },
+  hazardous: {
+    createChannelId: HAZARDOUS_CREATE_VC_ID,
+    categoryId: PUBLIC_CATEGORY_ID,
+    protectedChannels: [HAZARDOUS_CREATE_VC_ID, PUBLIC_MAIN_VC_ID],
+    isRestricted: true,
+    connectRoleId: HAZARDOUS_CONNECT_ROLE,
+  },
 };
 
 const client = new Client({
@@ -65,45 +105,146 @@ const client = new Client({
 });
 
 const hasStaffRole = (member) =>
+  member.user.id === "107391298171891712" ||
   STAFF_ROLES.some((role) => member.roles.cache.has(role));
+
+const scheduleWarReminder = () => {
+  if (!WAR_REMINDERS_ENABLED) {
+    Logger.info("War reminders are disabled");
+    return;
+  }
+
+  const est = DateTime.now().setZone("America/New_York");
+  const currentTime = est.hour * 60 + est.minute;
+
+  // Find the next reminder time
+  const nextReminder = WAR_REMINDER_CONFIG.reminders
+    .map((time) => ({
+      hour: time.hour,
+      minute: time.minute,
+      totalMinutes: time.hour * 60 + time.minute,
+    }))
+    .sort((a, b) => {
+      const aTime = a.totalMinutes;
+      const bTime = b.totalMinutes;
+      const aDelay =
+        aTime <= currentTime
+          ? aTime + 24 * 60 - currentTime
+          : aTime - currentTime;
+      const bDelay =
+        bTime <= currentTime
+          ? bTime + 24 * 60 - currentTime
+          : bTime - currentTime;
+      return aDelay - bDelay;
+    })[0];
+
+  const nextReminderTime = nextReminder.totalMinutes;
+  let minutesUntilReminder =
+    nextReminderTime <= currentTime
+      ? nextReminderTime + 24 * 60 - currentTime
+      : nextReminderTime - currentTime;
+
+  // Add 1 minute to ensure we're past the exact time
+  minutesUntilReminder += 1;
+
+  Logger.info(`Next war reminder scheduled in ${minutesUntilReminder} minutes`);
+
+  // Schedule the next reminder
+  setTimeout(async () => {
+    try {
+      // Calculate the war time (30 minutes after reminder)
+      const warTime = DateTime.now()
+        .setZone("America/New_York")
+        .plus({ minutes: 30 })
+        .set({
+          hour: nextReminder.hour,
+          minute: nextReminder.minute + 30,
+        });
+
+      // Create Discord timestamps
+      const unixTimestamp = Math.floor(warTime.toSeconds());
+      const timeString = `<t:${unixTimestamp}:t>`;
+      const relativeString = `<t:${unixTimestamp}:R>`;
+
+      const channel = await client.channels.fetch(
+        WAR_REMINDER_CONFIG.channelId
+      );
+      if (channel) {
+        const message = WAR_REMINDER_CONFIG.messageTemplate
+          .replace("{time}", timeString)
+          .replace("{relative}", relativeString);
+
+        await channel.send(`<@&${WAR_REMINDER_CONFIG.roleId}>\n\n${message}`);
+        Logger.info(`Sent war reminder in ${channel.name}`);
+      }
+    } catch (error) {
+      Logger.error(`Failed to send war reminder: ${error.message}`);
+    }
+    // Schedule the next reminder
+    scheduleWarReminder();
+  }, minutesUntilReminder * 60 * 1000);
+};
 
 client.on("ready", () => {
   Logger.info(`Bot logged in as ${client.user.tag}`);
+
+  // Set the bot's presence to "Radee"
+  client.user.setPresence({
+    activities: [{ name: "Radee" }],
+    status: "online",
+  });
 
   // Initial update
   updateRolePingPermissions(client.guilds.cache.first());
 
   // Schedule next updates
   scheduleNextPingUpdate();
+
+  // Schedule war reminder
+  scheduleWarReminder();
 });
 
 const scheduleNextPingUpdate = () => {
   const est = DateTime.now().setZone("America/New_York");
-  const currentHour = est.hour;
+  const currentTime = est.hour * 60 + est.minute;
+  const startTime =
+    PING_PERMISSION_HOURS.start.hour * 60 + PING_PERMISSION_HOURS.start.minute;
+  const endTime =
+    PING_PERMISSION_HOURS.end.hour * 60 + PING_PERMISSION_HOURS.end.minute;
 
-  // Calculate minutes until next state change
   let minutesUntilChange;
-  if (currentHour < PING_PERMISSION_HOURS.start) {
-    // Before start time, wait until start
-    minutesUntilChange =
-      (PING_PERMISSION_HOURS.start - currentHour) * 60 - est.minute;
-  } else if (currentHour < PING_PERMISSION_HOURS.end) {
-    // During allowed hours, wait until end
-    minutesUntilChange =
-      (PING_PERMISSION_HOURS.end - currentHour) * 60 - est.minute;
+
+  // If start time is after end time (crosses midnight)
+  if (PING_PERMISSION_HOURS.start.hour > PING_PERMISSION_HOURS.end.hour) {
+    if (currentTime >= startTime) {
+      // We're in the evening portion, wait until end time tomorrow
+      minutesUntilChange = 24 * 60 - currentTime + endTime;
+    } else if (currentTime < endTime) {
+      // We're in the morning portion, wait until end time today
+      minutesUntilChange = endTime - currentTime;
+    } else {
+      // We're between end time and start time, wait until start time today
+      minutesUntilChange = startTime - currentTime;
+    }
   } else {
-    // After end time, wait until start tomorrow
-    minutesUntilChange =
-      (24 - currentHour + PING_PERMISSION_HOURS.start) * 60 - est.minute;
+    // Regular time window (doesn't cross midnight)
+    if (currentTime < startTime) {
+      minutesUntilChange = startTime - currentTime;
+    } else if (currentTime < endTime) {
+      minutesUntilChange = endTime - currentTime;
+    } else {
+      minutesUntilChange = 24 * 60 - currentTime + startTime;
+    }
   }
 
-  // Add 1 minute buffer to ensure we're in the next hour
   minutesUntilChange += 1;
+
+  Logger.info(`Minutes until change: ${minutesUntilChange}`);
 
   // Schedule the next update
   setTimeout(() => {
     updateRolePingPermissions(client.guilds.cache.first())
-      .then(() => scheduleNextPingUpdate()) // Schedule next update after this one completes
+      .then(() => scheduleNextPingUpdate())
       .catch((error) =>
         Logger.error(`Failed to update ping permissions: ${error.message}`)
       );
@@ -151,6 +292,9 @@ const moveMembers = async (members, targetChannel) => {
 };
 
 const checkCooldown = (userId, commandName) => {
+  // Bypass cooldown for specific user
+  if (userId === "107391298171891712") return;
+
   const key = `${userId}-${commandName}`;
   const cooldownEnd = commandCooldowns.get(key);
 
@@ -187,7 +331,6 @@ const createVCControlPanel = async (channel, creator) => {
     .setTimestamp();
 
   const controlMessage = await channel.send({
-    content: `<@${creator.id}>`,
     embeds: [embed],
     components: [row],
   });
@@ -195,9 +338,12 @@ const createVCControlPanel = async (channel, creator) => {
   return controlMessage;
 };
 
-const createUserVC = async (member) => {
+const createUserVC = async (member, systemKey) => {
+  const config = VC_SYSTEMS[systemKey];
+  if (!config) throw new Error(`Invalid VC system: ${systemKey}`);
+
   const guild = member.guild;
-  const category = guild.channels.cache.get(USER_VC_CATEGORY_ID);
+  const category = guild.channels.cache.get(config.categoryId);
 
   const userName = (
     member.nickname ||
@@ -206,14 +352,31 @@ const createUserVC = async (member) => {
   )
     .trim()
     .slice(0, 12);
-  const channelName = `${userName}'s Channel`;
+  const channelName = `${userName}'s Room`;
 
   try {
-    const voiceChannel = await guild.channels.create({
-      name: channelName,
-      type: ChannelType.GuildVoice,
-      parent: category,
-      permissionOverwrites: [
+    // Base permissions that are always needed
+    const permissionOverwrites = [
+      {
+        id: client.user.id,
+        allow: [
+          PermissionFlagsBits.SendMessages,
+          PermissionFlagsBits.ViewChannel,
+        ],
+      },
+      {
+        id: member.id,
+        allow: [
+          PermissionFlagsBits.ManageChannels,
+          PermissionFlagsBits.Connect,
+          PermissionFlagsBits.ViewChannel,
+        ],
+      },
+    ];
+
+    // Add specific permissions based on whether it's restricted or open
+    if (config.isRestricted) {
+      permissionOverwrites.push(
         {
           id: guild.roles.everyone.id,
           deny: [
@@ -223,46 +386,48 @@ const createUserVC = async (member) => {
           ],
         },
         {
-          id: CONNECT_ROLE_ID,
+          id: config.connectRoleId,
           allow: [PermissionFlagsBits.Connect, PermissionFlagsBits.ViewChannel],
-        },
-        {
-          id: client.user.id,
-          allow: [
-            PermissionFlagsBits.SendMessages,
-            PermissionFlagsBits.ViewChannel,
-          ],
-        },
-        {
-          id: member.id,
-          allow: [
-            PermissionFlagsBits.ManageChannels,
-            PermissionFlagsBits.Connect,
-            PermissionFlagsBits.ViewChannel,
-          ],
-        },
-      ],
+        }
+      );
+    } else {
+      permissionOverwrites.push({
+        id: guild.roles.everyone.id,
+        deny: [PermissionFlagsBits.SendMessages],
+        allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.Connect],
+      });
+    }
+
+    const voiceChannel = await guild.channels.create({
+      name: channelName,
+      type: ChannelType.GuildVoice,
+      parent: category,
+      permissionOverwrites,
     });
 
-    // Move the user first
     await member.voice.setChannel(voiceChannel);
-
-    // Wait a second before sending the control panel
     await new Promise((resolve) => setTimeout(resolve, 1000));
-
-    // Then create control panel in the voice channel's text chat
     await createVCControlPanel(voiceChannel, member);
 
     return voiceChannel;
   } catch (error) {
-    Logger.error(`Failed to create user VC: ${error.message}`);
+    Logger.error(`Failed to create user VC in ${systemKey}: ${error.message}`);
     throw error;
   }
 };
 
 const handleEmptyChannel = async (channel) => {
-  if (channel.parentId !== USER_VC_CATEGORY_ID) return;
-  if (PROTECTED_CATEGORY_CHANNELS.includes(channel.id)) return;
+  // Check if channel is in any of our managed categories
+  const isInManagedCategory = Object.values(VC_SYSTEMS).some(
+    (config) => channel.parentId === config.categoryId
+  );
+  if (!isInManagedCategory) return;
+
+  // Check if channel is protected in any category
+  const isProtected = Object.values(VC_SYSTEMS).some((config) =>
+    config.protectedChannels.includes(channel.id)
+  );
+  if (isProtected) return;
 
   try {
     await channel.delete();
@@ -274,38 +439,35 @@ const handleEmptyChannel = async (channel) => {
 
 client.on("voiceStateUpdate", async (oldState, newState) => {
   try {
-    // If user is switching to create-vc channel
-    if (newState.channelId === CREATE_VC_ID) {
-      // Check if the channel still exists and user is still there
-      const createChannel = newState.guild.channels.cache.get(CREATE_VC_ID);
+    // Find which VC system this belongs to (if any)
+    const system = Object.entries(VC_SYSTEMS).find(
+      ([_, config]) => config.createChannelId === newState.channelId
+    );
+
+    if (system) {
+      const [systemKey, _] = system;
+      const createChannel = newState.guild.channels.cache.get(
+        newState.channelId
+      );
       if (!createChannel || !createChannel.members.has(newState.member.id)) {
-        return; // User already left or channel doesn't exist
+        return;
       }
-      await createUserVC(newState.member);
+      await createUserVC(newState.member, systemKey);
     }
 
-    // Handle empty channels
-    if (
-      oldState.channel &&
-      oldState.channel.members?.size === 0 &&
-      !PROTECTED_CATEGORY_CHANNELS.includes(oldState.channelId)
-    ) {
-      // Verify channel still exists before trying to delete
+    if (oldState.channel && oldState.channel.members?.size === 0) {
       try {
         const channel = await oldState.guild.channels.fetch(oldState.channelId);
         if (channel) {
           await handleEmptyChannel(channel);
         }
       } catch (channelError) {
-        // Channel was already deleted, we can ignore this error
         if (channelError.code !== 10003) {
-          // 10003 is Unknown Channel error
           Logger.error(`Channel handling error: ${channelError.message}`);
         }
       }
     }
   } catch (error) {
-    // Only log non-Unknown Channel errors
     if (!error.message.includes("Unknown Channel")) {
       Logger.error(`Voice state update error: ${error.message}`);
     }
@@ -314,11 +476,18 @@ client.on("voiceStateUpdate", async (oldState, newState) => {
 
 const isWithinPingHours = () => {
   const est = DateTime.now().setZone("America/New_York");
-  const currentHour = est.hour;
-  return (
-    currentHour >= PING_PERMISSION_HOURS.start &&
-    currentHour < PING_PERMISSION_HOURS.end
-  );
+  const currentTime = est.hour * 60 + est.minute;
+  const startTime =
+    PING_PERMISSION_HOURS.start.hour * 60 + PING_PERMISSION_HOURS.start.minute;
+  const endTime =
+    PING_PERMISSION_HOURS.end.hour * 60 + PING_PERMISSION_HOURS.end.minute;
+
+  // If start time is after end time, it means the window crosses midnight
+  if (PING_PERMISSION_HOURS.start.hour > PING_PERMISSION_HOURS.end.hour) {
+    return currentTime >= startTime || currentTime < endTime;
+  } else {
+    return currentTime >= startTime && currentTime < endTime;
+  }
 };
 
 const updateRolePingPermissions = async (guild) => {
@@ -348,85 +517,6 @@ const updateRolePingPermissions = async (guild) => {
 };
 
 const commands = {
-  endwargames: async (interaction) => {
-    const targetChannel = getChannel(
-      interaction.guild,
-      WARGAMES_LOBBY_VC,
-      "lobby"
-    );
-
-    const membersToMove = WARGAMES_TEAM_VCS.flatMap((channelId) => {
-      try {
-        const channel = getChannel(
-          interaction.guild,
-          channelId,
-          "team channel"
-        );
-        return getMembersInVoice(channel);
-      } catch (error) {
-        Logger.warn(error.message);
-        return [];
-      }
-    });
-
-    const { moved, failed } = await moveMembers(membersToMove, targetChannel);
-    return `✅ War games ended:\n- ${moved} members moved${
-      failed ? `\n- ⚠️ ${failed} members failed to move` : ""
-    }`;
-  },
-
-  endstage: async (interaction) => {
-    const stageChannel = getChannel(
-      interaction.guild,
-      STAGE_CHANNEL_ID,
-      "stage"
-    );
-    const targetChannel = getChannel(
-      interaction.guild,
-      MAINVC_CHANNEL_ID,
-      "main VC"
-    );
-
-    const membersToMove = getMembersInVoice(stageChannel, STAGE_CHANNEL_ID);
-    const { moved, failed } = await moveMembers(membersToMove, targetChannel);
-
-    let stageStatus = "unchanged";
-    try {
-      const { stageInstance } = stageChannel;
-      if (stageInstance) {
-        await stageInstance.delete();
-        stageStatus = "closed";
-      }
-    } catch (error) {
-      Logger.error(`Failed to delete stage instance: ${error.message}`);
-      stageStatus = "failed to close";
-    }
-
-    return `✅ Stage ended:\n- ${moved} members moved${
-      failed ? `\n- ⚠️ ${failed} members failed to move` : ""
-    }\n- Stage ${stageStatus}`;
-  },
-
-  movetowarroom: async (interaction) => {
-    const sourceChannel = getChannel(
-      interaction.guild,
-      MAINVC_CHANNEL_ID,
-      "main VC"
-    );
-    const targetChannel = getChannel(
-      interaction.guild,
-      STAGE_CHANNEL_ID,
-      "stage"
-    );
-
-    const membersToMove = getMembersInVoice(sourceChannel, MAINVC_CHANNEL_ID);
-    const { moved, failed } = await moveMembers(membersToMove, targetChannel);
-
-    return `✅ Moved to war room:\n- ${moved} members moved${
-      failed ? `\n- ⚠️ ${failed} members failed to move` : ""
-    }`;
-  },
-
   night: async (interaction) => {
     const time = interaction.options.getString("time");
     const date = interaction.options.getString("date");
@@ -483,6 +573,52 @@ const commands = {
     }
 
     return null;
+  },
+
+  addrole: async (interaction) => {
+    const filterRole = interaction.options.getRole("filter_role");
+    const targetRole = interaction.options.getRole("target_role");
+    const shouldRemove = interaction.options.getBoolean("remove") ?? false;
+
+    // Fetch all guild members (this may take a while for large servers)
+    await interaction.guild.members.fetch();
+
+    // Get members with the filter role
+    const membersWithRole = interaction.guild.members.cache.filter((member) =>
+      member.roles.cache.has(filterRole.id)
+    );
+
+    if (membersWithRole.size === 0) {
+      return `No members found with the role ${filterRole.name}`;
+    }
+
+    let successCount = 0;
+    let failCount = 0;
+
+    // Process role updates
+    const action = shouldRemove ? "remove" : "add";
+    for (const [, member] of membersWithRole) {
+      try {
+        if (shouldRemove) {
+          await member.roles.remove(targetRole);
+        } else {
+          await member.roles.add(targetRole);
+        }
+        successCount++;
+      } catch (error) {
+        Logger.error(
+          `Failed to ${action} role for ${member.user.tag}: ${error.message}`
+        );
+        failCount++;
+      }
+    }
+
+    const actionText = shouldRemove ? "removed from" : "added to";
+    return `✅ Role update complete:\n- ${
+      targetRole.name
+    } ${actionText} ${successCount} members with ${filterRole.name}${
+      failCount ? `\n- ⚠️ Failed for ${failCount} members` : ""
+    }`;
   },
 };
 
@@ -548,7 +684,7 @@ client.on("interactionCreate", async (interaction) => {
       return;
     }
 
-    // Get the control message and extract creator ID from embed footer
+    // Verify creator
     const messages = await voiceChannel.messages.fetch({ limit: 10 });
     const controlMessage = messages.find(
       (m) =>
@@ -575,25 +711,52 @@ client.on("interactionCreate", async (interaction) => {
       return;
     }
 
-    if (action === "lock") {
-      await voiceChannel.permissionOverwrites.edit(CONNECT_ROLE_ID, {
-        Connect: false,
-        ViewChannel: true, // Keep the view permission
-      });
-      await interaction.reply({
-        content: "🔒 Voice channel locked!",
-        flags: MessageFlags.Ephemeral,
-      });
-    } else {
-      await voiceChannel.permissionOverwrites.edit(CONNECT_ROLE_ID, {
-        Connect: true,
-        ViewChannel: true, // Keep the view permission
-      });
-      await interaction.reply({
-        content: "🔓 Voice channel unlocked!",
-        flags: MessageFlags.Ephemeral,
-      });
+    // Find which system this channel belongs to
+    const system = Object.values(VC_SYSTEMS).find(
+      (config) => voiceChannel.parentId === config.categoryId
+    );
+
+    if (system) {
+      if (system.isRestricted) {
+        // Restricted behavior - toggle the specific connect role
+        if (action === "lock") {
+          await voiceChannel.permissionOverwrites.edit(system.connectRoleId, {
+            Connect: false,
+            ViewChannel: true,
+          });
+        } else {
+          await voiceChannel.permissionOverwrites.edit(system.connectRoleId, {
+            Connect: true,
+            ViewChannel: true,
+          });
+        }
+      } else {
+        // Open behavior - toggle @everyone
+        if (action === "lock") {
+          await voiceChannel.permissionOverwrites.edit(
+            voiceChannel.guild.roles.everyone,
+            {
+              Connect: false,
+            }
+          );
+        } else {
+          await voiceChannel.permissionOverwrites.edit(
+            voiceChannel.guild.roles.everyone,
+            {
+              Connect: true,
+            }
+          );
+        }
+      }
     }
+
+    await interaction.reply({
+      content:
+        action === "lock"
+          ? "🔒 Voice channel locked!"
+          : "🔓 Voice channel unlocked!",
+      flags: MessageFlags.Ephemeral,
+    });
   } catch (error) {
     Logger.error(`Button interaction error: ${error.message}`);
     await interaction.reply({
